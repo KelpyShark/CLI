@@ -1,0 +1,13 @@
+[package]
+name = "kelpyshark-cli"
+version.workspace = true
+edition = "2021"
+
+[dependencies]
+kelpyshark-compiler = { path = "../compiler" }
+kelpyshark-interpreter = { path = "../interpreter" }
+kelpyshark-stdlib = { path = "../stdlib" }
+kelpyshark-package-manager = { path = "../package_manager" }
+clap = { version = "4", features = ["derive"] }
+
+[dev-dependencies]
