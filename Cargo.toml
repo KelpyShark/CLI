@@ -3,6 +3,18 @@ name = "kelpyshark-cli"
 version.workspace = true
 edition = "2021"
 
+[[bin]]
+name = "kelpyshark"
+path = "src/main.rs"
+
+[[bin]]
+name = "ks"
+path = "src/main.rs"
+
+[[bin]]
+name = "kshark"
+path = "src/main.rs"
+
 [dependencies]
 kelpyshark-compiler = { path = "../compiler" }
 kelpyshark-interpreter = { path = "../interpreter" }

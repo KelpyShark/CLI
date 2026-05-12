@@ -5,6 +5,9 @@
 ///   kelpy repl              - Start the interactive REPL
 ///   kelpy build <file.ks>   - Compile to a target language
 ///   kelpy new <name>        - Create a new KelpyShark project
+///   kelpy install <package> - Install a package
+///   kelpy publish           - Publish the current package
+///   kelpy update            - Update all installed packages
 
 use clap::{Parser, Subcommand};
 use std::fs;
@@ -12,11 +15,12 @@ use std::path::PathBuf;
 use std::process;
 
 use kelpyshark_interpreter::interpreter::Interpreter;
+use kelpyshark_package_manager::registry::Registry;
 
 #[derive(Parser)]
 #[command(name = "kelpy")]
 #[command(version = "0.1.0")]
-#[command(about = "🦈 The KelpyShark Programming Language")]
+#[command(about = "The KelpyShark Programming Language ")]
 struct Cli {
     #[command(subcommand)]
     command: Commands,
@@ -60,11 +64,13 @@ enum Commands {
     },
     /// Install a KelpyShark package
     Install {
-        /// Package name
-        package: String,
+        /// Package name (optional — installs all deps from kelpy.toml if omitted)
+        package: Option<String>,
     },
-    /// Publish a KelpyShark package
+    /// Publish the current package to the local registry
     Publish,
+    /// Update all installed packages to their latest versions
+    Update,
 }
 
 fn main() {
@@ -84,8 +90,9 @@ fn main() {
             output,
         } => cmd_build(&file, &target, output.as_deref()),
         Commands::New { name } => cmd_new(&name),
-        Commands::Install { package } => cmd_install(&package),
+        Commands::Install { package } => cmd_install(package.as_deref()),
         Commands::Publish => cmd_publish(),
+        Commands::Update => cmd_update(),
     }
 }
 
@@ -163,12 +170,10 @@ fn cmd_build(file: &PathBuf, target: &str, output: Option<&std::path::Path>) {
             kelpyshark_compiler::codegen::javascript::generate(&program)
         }
         "java" => {
-            eprintln!("🦈 Java code generation is not yet implemented.");
-            process::exit(1);
+            kelpyshark_compiler::codegen::java::generate(&program)
         }
         "cs" | "csharp" => {
-            eprintln!("🦈 C# code generation is not yet implemented.");
-            process::exit(1);
+            kelpyshark_compiler::codegen::cs::generate(&program)
         }
         other => {
             eprintln!("Unknown target: '{}'. Supported: c, js, java, cs", other);
@@ -182,7 +187,7 @@ fn cmd_build(file: &PathBuf, target: &str, output: Option<&std::path::Path>) {
     }
 
     println!(
-        "🦈 Compiled {} → {} ({} target, {} bytes)",
+        "Compiled {} → {} ({} target, {} bytes)",
         file.display(),
         output_path.display(),
         target,
@@ -221,11 +226,11 @@ description = ""
 
     // Create main.ks
     let main_content = r#"# Welcome to KelpyShark!
-print "Hello, KelpyShark! 🦈"
+print "Hello, KelpyShark! "
 "#;
     fs::write(base.join("src").join("main.ks"), main_content).unwrap();
 
-    println!("🦈 Created new KelpyShark project '{}'", name);
+    println!("Created new KelpyShark project '{}'", name);
     println!("   {}/", name);
     println!("   ├── kelpy.toml");
     println!("   ├── src/");
@@ -233,13 +238,87 @@ print "Hello, KelpyShark! 🦈"
     println!("   └── libs/");
 }
 
-fn cmd_install(package: &str) {
-    println!(
-        "🦈 Package manager not yet implemented. Would install: {}",
-        package
-    );
+fn cmd_install(package: Option<&str>) {
+    let registry = Registry::default();
+    if let Err(e) = registry.init() {
+        eprintln!("Registry error: {}", e);
+        process::exit(1);
+    }
+
+    let project_dir = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+
+    match package {
+        Some(pkg) => {
+            // Install a specific package by name
+            match kelpyshark_package_manager::installer::install_one(&project_dir, pkg, &registry) {
+                Ok(msg) => println!("Installed {}", msg),
+                Err(e)  => {
+                    eprintln!("Install error: {}", e);
+                    process::exit(1);
+                }
+            }
+        }
+        None => {
+            // Install all dependencies from kelpy.toml
+            match kelpyshark_package_manager::installer::install_all(&project_dir, &registry) {
+                Ok(installed) => {
+                    if installed.is_empty() {
+                        println!("Nothing to install.");
+                    } else {
+                        for pkg in &installed {
+                            println!("Installed {}", pkg);
+                        }
+                    }
+                }
+                Err(e) => {
+                    eprintln!("Install error: {}", e);
+                    process::exit(1);
+                }
+            }
+        }
+    }
 }
 
 fn cmd_publish() {
-    println!("🦈 Package publishing not yet implemented.");
+    let registry = Registry::default();
+    if let Err(e) = registry.init() {
+        eprintln!("Registry error: {}", e);
+        process::exit(1);
+    }
+
+    let project_dir = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+
+    match kelpyshark_package_manager::publisher::publish(&project_dir, &registry) {
+        Ok(msg) => println!("{}", msg),
+        Err(e)  => {
+            eprintln!("Publish error: {}", e);
+            process::exit(1);
+        }
+    }
+}
+
+fn cmd_update() {
+    let registry = Registry::default();
+    if let Err(e) = registry.init() {
+        eprintln!("Registry error: {}", e);
+        process::exit(1);
+    }
+
+    let project_dir = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+
+    match kelpyshark_package_manager::installer::update_all(&project_dir, &registry) {
+        Ok(updated) => {
+            if updated.is_empty() {
+                println!("All packages are up to date.");
+            } else {
+                for msg in &updated {
+                    println!("Updated {}", msg);
+                }
+            }
+        }
+        Err(e) => {
+            eprintln!("Update error: {}", e);
+            process::exit(1);
+        }
+    }
 }
