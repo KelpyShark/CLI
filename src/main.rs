@@ -19,7 +19,7 @@ use kelpyshark_package_manager::registry::Registry;
 
 #[derive(Parser)]
 #[command(name = "kelpy")]
-#[command(version = "0.1.0")]
+#[command(version = "0.2.0")]
 #[command(about = "The KelpyShark Programming Language ")]
 struct Cli {
     #[command(subcommand)]
@@ -215,7 +215,7 @@ fn cmd_new(name: &str) {
     let toml_content = format!(
         r#"[package]
 name = "{}"
-version = "0.1.0"
+version = "0.2.0"
 description = ""
 
 [dependencies]
