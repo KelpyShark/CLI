@@ -32,6 +32,9 @@ enum Commands {
     Run {
         /// Path to the .ks file
         file: PathBuf,
+        /// Arguments passed to the script after `--`
+        #[arg(last = true, num_args = 0.., allow_hyphen_values = true)]
+        args: Vec<String>,
     },
     /// Start the interactive REPL
     Repl,
@@ -77,7 +80,7 @@ fn main() {
     let cli = Cli::parse();
 
     match cli.command {
-        Commands::Run { file } => cmd_run(&file),
+        Commands::Run { file, args: _ } => cmd_run(&file),
         Commands::Repl => cmd_repl(),
         Commands::Build {
             file,
@@ -105,7 +108,7 @@ fn cmd_run(file: &PathBuf) {
         }
     };
 
-    let mut interp = Interpreter::new();
+    let mut interp = create_interpreter();
     if let Err(e) = interp.exec(&source) {
         eprintln!("{}", e);
         process::exit(1);
@@ -113,8 +116,16 @@ fn cmd_run(file: &PathBuf) {
 }
 
 fn cmd_repl() {
-    let mut interp = Interpreter::new();
+    let mut interp = create_interpreter();
     interp.repl();
+}
+
+fn create_interpreter() -> Interpreter {
+    let mut interp = Interpreter::new();
+    for (name, module) in kelpyshark_stdlib::modules() {
+        interp.register_module(name, module);
+    }
+    interp
 }
 
 fn cmd_build(file: &PathBuf, target: &str, output: Option<&std::path::Path>) {
@@ -145,6 +156,11 @@ fn cmd_build(file: &PathBuf, target: &str, output: Option<&std::path::Path>) {
         }
     };
 
+    if let Err(e) = kelpyshark_compiler::semantic::SemanticAnalyzer::check(&program) {
+        eprintln!("{}", e);
+        process::exit(1);
+    }
+
     // Determine default extension based on target
     let default_ext = match target {
         "c" => "c",
@@ -154,26 +170,41 @@ fn cmd_build(file: &PathBuf, target: &str, output: Option<&std::path::Path>) {
         _ => "out",
     };
 
-    let default_output_name = file
-        .file_stem()
-        .unwrap_or_default()
-        .to_string_lossy()
-        .to_string();
-    let default_output = PathBuf::from(format!("{}.{}", default_output_name, default_ext));
+    let default_output = default_build_output(file, default_ext);
     let output_path = output.unwrap_or(&default_output);
 
     let generated = match target {
-        "c" => {
-            kelpyshark_compiler::codegen::c::generate(&program)
-        }
+        "c" => match kelpyshark_compiler::codegen::c::generate_checked(&program) {
+            Ok(source) => source,
+            Err(error) => {
+                eprintln!("C target error: {}", error);
+                process::exit(1);
+            }
+        },
         "js" | "javascript" => {
-            kelpyshark_compiler::codegen::javascript::generate(&program)
+            match kelpyshark_compiler::codegen::javascript::generate_checked(&program) {
+                Ok(source) => source,
+                Err(error) => {
+                    eprintln!("JavaScript target error: {}", error);
+                    process::exit(1);
+                }
+            }
         }
-        "java" => {
-            kelpyshark_compiler::codegen::java::generate(&program)
-        }
+        "java" => match kelpyshark_compiler::codegen::java::generate_checked(&program) {
+            Ok(source) => source,
+            Err(error) => {
+                eprintln!("Java target error: {}", error);
+                process::exit(1);
+            }
+        },
         "cs" | "csharp" => {
-            kelpyshark_compiler::codegen::cs::generate(&program)
+            match kelpyshark_compiler::codegen::cs::generate_checked(&program) {
+                Ok(source) => source,
+                Err(error) => {
+                    eprintln!("C# target error: {}", error);
+                    process::exit(1);
+                }
+            }
         }
         other => {
             eprintln!("Unknown target: '{}'. Supported: c, js, java, cs", other);
@@ -195,18 +226,29 @@ fn cmd_build(file: &PathBuf, target: &str, output: Option<&std::path::Path>) {
     );
 }
 
+fn default_build_output(file: &std::path::Path, extension: &str) -> PathBuf {
+    file.with_extension(extension)
+}
+
 fn cmd_new(name: &str) {
+    if let Err(error) = kelpyshark_package_manager::manifest::validate_package_name(name) {
+        eprintln!("Invalid project name: {}", error);
+        process::exit(1);
+    }
+
     let base = PathBuf::from(name);
 
-    // Create project structure
-    let dirs = [
-        base.join("src"),
-        base.join("libs"),
-    ];
-
-    for dir in &dirs {
-        if let Err(e) = fs::create_dir_all(dir) {
-            eprintln!("Error creating directory '{}': {}", dir.display(), e);
+    if base.exists() {
+        eprintln!("Project path '{}' already exists", base.display());
+        process::exit(1);
+    }
+    if let Err(error) = fs::create_dir(&base) {
+        eprintln!("Error creating project directory '{}': {}", base.display(), error);
+        process::exit(1);
+    }
+    for dir in [base.join("src"), base.join("libs")] {
+        if let Err(error) = fs::create_dir(&dir) {
+            eprintln!("Error creating directory '{}': {}", dir.display(), error);
             process::exit(1);
         }
     }
@@ -222,13 +264,19 @@ description = ""
 "#,
         name
     );
-    fs::write(base.join("kelpy.toml"), toml_content).unwrap();
+    if let Err(error) = fs::write(base.join("kelpy.toml"), toml_content) {
+        eprintln!("Error writing project manifest: {}", error);
+        process::exit(1);
+    }
 
     // Create main.ks
     let main_content = r#"# Welcome to KelpyShark!
 print "Hello, KelpyShark! "
 "#;
-    fs::write(base.join("src").join("main.ks"), main_content).unwrap();
+    if let Err(error) = fs::write(base.join("src").join("main.ks"), main_content) {
+        eprintln!("Error writing starter program: {}", error);
+        process::exit(1);
+    }
 
     println!("Created new KelpyShark project '{}'", name);
     println!("   {}/", name);
@@ -320,5 +368,40 @@ fn cmd_update() {
             eprintln!("Update error: {}", e);
             process::exit(1);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn run_accepts_script_arguments_after_separator() {
+        let cli = Cli::try_parse_from([
+            "kelpyshark",
+            "run",
+            "main.ks",
+            "--",
+            "Alice",
+            "--verbose",
+        ])
+        .expect("run should accept script arguments after --");
+
+        match cli.command {
+            Commands::Run { file, args } => {
+                assert_eq!(file, PathBuf::from("main.ks"));
+                assert_eq!(args, vec!["Alice", "--verbose"]);
+            }
+            _ => panic!("expected the run command"),
+        }
+    }
+
+    #[test]
+    fn default_build_output_stays_beside_the_input_file() {
+        let source = PathBuf::from("examples/hello.ks");
+        assert_eq!(
+            default_build_output(&source, "java"),
+            PathBuf::from("examples/hello.java")
+        );
     }
 }
